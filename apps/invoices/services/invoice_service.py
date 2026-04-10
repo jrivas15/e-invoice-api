@@ -37,6 +37,10 @@ def process_invoice(invoice_id: str):
         xml, cufe = build_xml(invoice, config)
         # print(f"Generated XML for invoice {invoice.id}:\n{xml}")
         signed_xml = sign_xml(xml, p12, password)
+
+        with open(f"./invoice_{invoice.full_number}.xml", "w", encoding="utf-8") as f:
+            f.write(signed_xml)
+
         response = send_to_dian(signed_xml, p12, password, config)
         # print(f"DIAN response for invoice {invoice.id}:\n{response}")
 

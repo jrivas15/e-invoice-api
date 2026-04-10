@@ -202,12 +202,11 @@ def send_to_dian(
         )
         print(f'DIAN response status: {resp.status_code}')
         print(f'DIAN response body: {resp.text}')
-        # _save_debug(resp.text, 'soap_response.xml')
+        _save_debug(resp.text, f'dian_response_{zip_filename[:-4]}.xml')
         resp.raise_for_status()
-        return _parse_response(resp.text)
+        return _parse_response(resp.text, zip_filename)
     except requests.exceptions.HTTPError as exc:
-        # _save_debug(exc.response.text, 'soap_response.xml')
-        # print(f'HTTP error: {exc.response.status_code} - {exc.response.text[:500]}')
+        _save_debug(exc.response.text, f'dian_response_{zip_filename[:-4]}_error.xml')
         return {
             'code': '99',
             'errors': [str(exc)],
@@ -252,7 +251,7 @@ def _zip_filename(config, signed_xml: str) -> str:
     return f'{nit}{year}{inv_number}.zip'
 
 
-def _parse_response(soap_response: str) -> dict:
+def _parse_response(soap_response: str, zip_filename: str = '') -> dict:
     """Parse DIAN SendBillSync SOAP response into a normalised dict."""
     try:
         from lxml import etree
@@ -300,6 +299,8 @@ def _parse_response(soap_response: str) -> dict:
         if b64_node is not None and b64_node.text:
             try:
                 ar_xml = base64.b64decode(b64_node.text.strip())
+                label = zip_filename[:-4] if zip_filename else 'unknown'
+                _save_debug(ar_xml.decode('utf-8', errors='replace'), f'application_response_{label}.xml')
                 ar_root = etree.fromstring(ar_xml)
                 CBC = 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2'
                 CAC = 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2'

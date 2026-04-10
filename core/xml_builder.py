@@ -4,6 +4,7 @@ Build DIAN UBL 2.1 invoice XML for Colombia.
 Returns (xml_str, cufe_str) — no file I/O, no ORM calls.
 """
 import hashlib
+from collections import defaultdict
 from datetime import datetime, time as dt_time
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -80,15 +81,29 @@ def build_xml(invoice, config) -> tuple[str, str]:
     issue_date = issue_dt.strftime('%Y-%m-%d')
     issue_time = issue_dt.strftime('%H:%M:%S') + '-05:00'
 
-    # --- Amounts ------------------------------------------------------------
-    subtotal  = _dec(invoice.subtotal)
-    discounts = _dec(invoice.discounts)
-    taxes     = _dec(invoice.taxes)
-    total     = _dec(invoice.total)
-
-    receiver = invoice.receiver or {}
+    receiver = invoice.customer or {}
     items    = invoice.items or []
     currency = invoice.currency or 'COP'
+
+    # --- Totals computed from items (source of truth for XML consistency) ---
+    # FAU02 requires LegalMonetaryTotal/LineExtensionAmount == sum of line amounts
+    # FAU04 requires TaxTotal/TaxableAmount == sum of line TaxableAmounts
+    computed_line_extension = Decimal('0.00')
+    computed_iva             = Decimal('0.00')
+
+    for _item in items:
+        _qty      = Decimal(str(_item.get('quantity', 1)))
+        _price    = _dec(_item.get('unit_price', 0))
+        _disc     = _dec(_item.get('discount', 0))
+        _taxable  = ((_price - _disc) * _qty).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+        computed_line_extension += _taxable
+        for _tax in _item.get('taxes', []):
+            _rate = _dec(_tax.get('rate', 0))
+            computed_iva += (_taxable * _rate / 100).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+    computed_line_extension = computed_line_extension.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    computed_iva            = computed_iva.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    computed_total          = (computed_line_extension + computed_iva).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
     # --- Security codes -----------------------------------------------------
     software_security_code = hashlib.sha384(
@@ -99,11 +114,11 @@ def build_xml(invoice, config) -> tuple[str, str]:
         f"{invoice.full_number}"
         f"{issue_date}"
         f"{issue_time}"
-        f"{subtotal:.2f}"
-        f"01{taxes:.2f}"
+        f"{computed_line_extension:.2f}"
+        f"01{computed_iva:.2f}"
         f"040.00"
         f"030.00"
-        f"{total:.2f}"
+        f"{computed_total:.2f}"
         f"{config.nit}"
         f"{receiver.get('document_number', '')}"
         f"{config.clave_tecnica}"
@@ -123,10 +138,10 @@ def build_xml(invoice, config) -> tuple[str, str]:
         f" HorFac={issue_time}"
         f" NitFacturador={config.nit}"
         f" NitAdquiriente={receiver.get('document_number', '')}"
-        f" ValorTotalFactura={float(subtotal)}"
-        f" ValIva={float(taxes)}"
+        f" ValorTotalFactura={float(computed_line_extension)}"
+        f" ValIva={float(computed_iva)}"
         f" ValOtroIm=0.0"
-        f" ValTolFac={float(total)}"
+        f" ValTolFac={float(computed_total)}"
         f" CUFE={cufe}"
         f" URL={find_url}"
     )
@@ -197,15 +212,15 @@ def build_xml(invoice, config) -> tuple[str, str]:
     etree.SubElement(pm, _cbc('PaymentMeansCode')).text = str(invoice.payment_means_code)
 
     # --- Tax total ----------------------------------------------------------
-    _build_tax_total(root, subtotal, taxes, currency)
+    _build_tax_total(root, items, currency)
 
     # --- Legal monetary total -----------------------------------------------
     lmt = etree.SubElement(root, _cac('LegalMonetaryTotal'))
-    _amt(lmt, _cbc('LineExtensionAmount'), subtotal, currency)
-    _amt(lmt, _cbc('TaxExclusiveAmount'), subtotal, currency)
-    _amt(lmt, _cbc('TaxInclusiveAmount'), total, currency)
+    _amt(lmt, _cbc('LineExtensionAmount'), computed_line_extension, currency)
+    _amt(lmt, _cbc('TaxExclusiveAmount'), computed_line_extension, currency)
+    _amt(lmt, _cbc('TaxInclusiveAmount'), computed_total, currency)
     _amt(lmt, _cbc('ChargeTotalAmount'), Decimal('0.00'), currency)
-    _amt(lmt, _cbc('PayableAmount'), total, currency)
+    _amt(lmt, _cbc('PayableAmount'), computed_total, currency)
 
     # --- Invoice lines ------------------------------------------------------
     for i, item in enumerate(items, start=1):
@@ -434,25 +449,71 @@ def _build_customer_party(root, receiver: dict):
     etree.SubElement(contact, _cbc('ElectronicMail')).text = receiver.get('email', '')
 
 
-def _build_tax_total(root, subtotal: Decimal, taxes: Decimal, currency: str):
-    tt = etree.SubElement(root, _cac('TaxTotal'))
-    _amt(tt, _cbc('TaxAmount'), taxes, currency)
-    tsub = etree.SubElement(tt, _cac('TaxSubtotal'))
-    _amt(tsub, _cbc('TaxableAmount'), subtotal, currency)
-    _amt(tsub, _cbc('TaxAmount'), taxes, currency)
-    tc = etree.SubElement(tsub, _cac('TaxCategory'))
-    etree.SubElement(tc, _cbc('Percent')).text = '19.00'
-    ts = etree.SubElement(tc, _cac('TaxScheme'))
-    etree.SubElement(ts, _cbc('ID')).text = '01'
-    etree.SubElement(ts, _cbc('Name')).text = 'IVA'
+_TAX_TYPE_NAMES = {'01': 'IVA', '03': 'ICA', '04': 'INC'}
+
+
+def _build_tax_total(root, items: list, currency: str):
+    """
+    Build one cac:TaxTotal per tax type found across all items.
+    Within each TaxTotal, one cac:TaxSubtotal per distinct rate.
+    Only tax types actually present in items are emitted.
+    """
+    # {tax_type: {tax_rate: {'taxable': Decimal, 'tax': Decimal}}}
+    tax_data: dict = defaultdict(lambda: defaultdict(
+        lambda: {'taxable': Decimal('0.00'), 'tax': Decimal('0.00')}
+    ))
+
+    for item in items:
+        item_qty = Decimal(str(item.get('quantity', 1)))
+        unit_price = _dec(item.get('unit_price', 0))
+        item_discount = _dec(item.get('discount', 0))
+
+        taxable = ((unit_price - item_discount) * item_qty).quantize(
+            Decimal('0.01'), rounding=ROUND_HALF_UP
+        )
+
+        for tax in item.get('taxes', []):
+            tax_type = tax.get('type', '01')
+            tax_rate = _dec(tax.get('rate', 0))
+            item_tax = (taxable * tax_rate / 100).quantize(
+                Decimal('0.01'), rounding=ROUND_HALF_UP
+            )
+            tax_data[tax_type][tax_rate]['taxable'] += taxable
+            tax_data[tax_type][tax_rate]['tax'] += item_tax
+
+    for tax_type, subtotals in tax_data.items():
+        total_tax = sum(v['tax'] for v in subtotals.values()).quantize(
+            Decimal('0.01'), rounding=ROUND_HALF_UP
+        )
+
+        tt = etree.SubElement(root, _cac('TaxTotal'))
+        _amt(tt, _cbc('TaxAmount'), total_tax, currency)
+
+        for tax_rate, amounts in subtotals.items():
+            tsub = etree.SubElement(tt, _cac('TaxSubtotal'))
+            _amt(tsub, _cbc('TaxableAmount'),
+                 amounts['taxable'].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP),
+                 currency)
+            _amt(tsub, _cbc('TaxAmount'),
+                 amounts['tax'].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP),
+                 currency)
+            tc = etree.SubElement(tsub, _cac('TaxCategory'))
+            etree.SubElement(tc, _cbc('Percent')).text = f'{tax_rate:.2f}'
+            ts = etree.SubElement(tc, _cac('TaxScheme'))
+            etree.SubElement(ts, _cbc('ID')).text = tax_type
+            etree.SubElement(ts, _cbc('Name')).text = _TAX_TYPE_NAMES.get(tax_type, tax_type)
 
 
 def _build_invoice_line(root, item: dict, line_num: int, currency: str):
     item_qty      = Decimal(str(item.get('quantity', 1)))
     unit_price    = _dec(item.get('unit_price', 0))
     item_discount = _dec(item.get('discount', 0))
-    tax_rate      = _dec(item.get('tax_rate', 19))
     unit_code     = item.get('unit_code', '94')
+
+    # First tax entry drives the line-level TaxTotal (DIAN requires one per line)
+    first_tax  = item.get('taxes', [{}])[0]
+    tax_rate   = _dec(first_tax.get('rate', 0))
+    tax_type   = first_tax.get('type', '01')
 
     total_sin_imp = ((unit_price - item_discount) * item_qty).quantize(
         Decimal('0.01'), rounding=ROUND_HALF_UP
@@ -470,19 +531,23 @@ def _build_invoice_line(root, item: dict, line_num: int, currency: str):
 
     _amt(line, _cbc('LineExtensionAmount'), total_sin_imp, currency)
 
-    # AllowanceCharge always present (required by DIAN schema)
-    discount_amt = (item_discount * item_qty).quantize(
-        Decimal('0.01'), rounding=ROUND_HALF_UP
-    )
-    multiplier = (item_discount / unit_price * 100).quantize(
-        Decimal('0.01'), rounding=ROUND_HALF_UP
-    ) if unit_price > 0 else Decimal('0.00')
-    ac = etree.SubElement(line, _cac('AllowanceCharge'))
-    etree.SubElement(ac, _cbc('ID')).text = str(line_num)
-    etree.SubElement(ac, _cbc('ChargeIndicator')).text = 'false'
-    etree.SubElement(ac, _cbc('MultiplierFactorNumeric')).text = f'{multiplier:.2f}'
-    _amt(ac, _cbc('Amount'), discount_amt, currency)
-    _amt(ac, _cbc('BaseAmount'), total_sin_imp + discount_amt, currency)
+    # AllowanceCharge only when there is an actual discount (FBE08)
+    if item_discount > 0:
+        discount_amt = (item_discount * item_qty).quantize(
+            Decimal('0.01'), rounding=ROUND_HALF_UP
+        )
+        gross_amt = (unit_price * item_qty).quantize(
+            Decimal('0.01'), rounding=ROUND_HALF_UP
+        )
+        multiplier = (item_discount / unit_price * 100).quantize(
+            Decimal('0.01'), rounding=ROUND_HALF_UP
+        )
+        ac = etree.SubElement(line, _cac('AllowanceCharge'))
+        etree.SubElement(ac, _cbc('ID')).text = str(line_num)
+        etree.SubElement(ac, _cbc('ChargeIndicator')).text = 'false'
+        etree.SubElement(ac, _cbc('MultiplierFactorNumeric')).text = f'{multiplier:.2f}'
+        _amt(ac, _cbc('Amount'), discount_amt, currency)
+        _amt(ac, _cbc('BaseAmount'), gross_amt, currency)
 
     ltt = etree.SubElement(line, _cac('TaxTotal'))
     _amt(ltt, _cbc('TaxAmount'), item_tax, currency)
@@ -492,9 +557,8 @@ def _build_invoice_line(root, item: dict, line_num: int, currency: str):
     ltc = etree.SubElement(ltsub, _cac('TaxCategory'))
     etree.SubElement(ltc, _cbc('Percent')).text = f'{tax_rate:.2f}'
     lts = etree.SubElement(ltc, _cac('TaxScheme'))
-    tax_type = item.get('tax_type', '01')
     etree.SubElement(lts, _cbc('ID')).text = tax_type
-    etree.SubElement(lts, _cbc('Name')).text = 'IVA' if tax_type == '01' else tax_type
+    etree.SubElement(lts, _cbc('Name')).text = _TAX_TYPE_NAMES.get(tax_type, tax_type)
 
     item_el = etree.SubElement(line, _cac('Item'))
     etree.SubElement(item_el, _cbc('Description')).text = item.get('description', '')

@@ -42,7 +42,7 @@ class Invoice(models.Model):
     attempts = models.IntegerField(default=0)
     processed_at = models.DateTimeField(null=True, blank=True)
 
-    receiver = models.JSONField()
+    customer = models.JSONField()
     items = models.JSONField()
 
     subtotal = models.DecimalField(max_digits=18, decimal_places=2)

@@ -25,7 +25,7 @@ class InvoiceListView(APIView):
         cert = Certificate.objects.get(tenant=tenant, active=True)
 
         full_number, number = get_next_number(tenant)
-
+        print(request.data)
         invoice = Invoice.objects.create(
             tenant=tenant,
             certificate=cert,
@@ -33,7 +33,7 @@ class InvoiceListView(APIView):
             number=number,
             full_number=full_number,
             invoice_date=timezone.now().date(),
-            receiver=request.data.get('receiver'),
+            customer=request.data.get('customer'),
             items=request.data.get('items'),
             subtotal=request.data.get('subtotal'),
             discounts=request.data.get('discounts', 0),
@@ -55,18 +55,26 @@ class InvoiceListView(APIView):
         except (ValueError, TypeError):
             page, per_page = 1, 20
 
-        repo     = InvoiceRepository(request.tenant)
-        qs       = repo.get_all()
-        total    = qs.count()
+        repo    = InvoiceRepository(request.tenant)
+        filters = {}
+        status_filter = request.query_params.get('status')
+        search = request.query_params.get('search', '').strip()
+        if status_filter:
+            filters['status'] = status_filter
+        if search:
+            filters['full_number__icontains'] = search
+        qs    = repo.get_all(**filters)
+        total = qs.count()
         offset   = (page - 1) * per_page
         invoices = qs[offset: offset + per_page]
 
         data = [
-            {
+            { 
                 'id': str(i.id),
                 'full_number': i.full_number,
                 'status': i.status,
                 'total': str(i.total),
+                'customer_name': (i.customer or {}).get('legalName'),
                 'created_at': i.created_at,
             }
             for i in invoices
