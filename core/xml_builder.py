@@ -50,7 +50,7 @@ def _dec(value) -> Decimal:
     return Decimal(str(value)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
 
-def build_xml(invoice, config) -> tuple[str, str]:
+def build_xml(invoice, config) -> tuple[str, str, str]:
     """
     Build DIAN UBL 2.1 XML for a sales invoice (type 01).
 
@@ -61,7 +61,7 @@ def build_xml(invoice, config) -> tuple[str, str]:
 
     Returns
     -------
-    (xml_str, cufe_str)
+    (xml_str, cufe_str, qr_content)
     """
     profile_execution_id = '2' if config.ambiente == 'PRUEBAS' else '1'
 
@@ -233,7 +233,7 @@ def build_xml(invoice, config) -> tuple[str, str]:
         pretty_print=True,
     ).decode('utf-8')
 
-    return xml_str, cufe
+    return xml_str, cufe, qr_content
 
 
 # ---------------------------------------------------------------------------

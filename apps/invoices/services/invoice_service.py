@@ -34,7 +34,7 @@ def process_invoice(invoice_id: str):
         config = FiscalConfig.objects.get(tenant=tenant)
         p12, password = load_certificate(tenant)
 
-        xml, cufe = build_xml(invoice, config)
+        xml, cufe, qr_data = build_xml(invoice, config)
         # print(f"Generated XML for invoice {invoice.id}:\n{xml}")
         signed_xml = sign_xml(xml, p12, password)
 
@@ -51,11 +51,24 @@ def process_invoice(invoice_id: str):
 
         invoice.signed_xml = signed_xml
         invoice.cufe = cufe
+        invoice.qr_data = qr_data
         invoice.dian_response = response
         invoice.processed_at = timezone.now()
         invoice.save()
 
         _update_monthly_usage(tenant, success=(invoice.status == Invoice.Status.ACCEPTED))
+
+        if invoice.status == Invoice.Status.ACCEPTED:
+            print(f'[process_invoice] Invoice {invoice.id} accepted by DIAN. Attempting to send email...')
+            try:
+                from core.email_service import send_invoice_email
+                ar_xml = response.get('application_response_xml', '')
+                ok = send_invoice_email(invoice, config, application_response_xml=ar_xml)
+                print(f'[process_invoice] Email sent for invoice {invoice.id} status={ok}')
+            except Exception as email_exc:
+                import traceback
+                print(f'[process_invoice] Email failed for invoice={invoice_id}: {email_exc}')
+                traceback.print_exc()
 
     except Exception as e:
         import traceback

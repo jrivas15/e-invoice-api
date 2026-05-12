@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="UTF-8"></head>
+<body style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto;">
+
+  <div style="background: #2C3E50; color: white; padding: 20px 24px; border-radius: 6px 6px 0 0;">
+    <h2 style="margin: 0; font-size: 18px;">Factura Electrónica</h2>
+    <p style="margin: 4px 0 0; font-size: 14px; opacity: 0.85;">{legal_name}</p>
+  </div>
+
+  <div style="background: #f9f9f9; padding: 24px; border: 1px solid #ddd; border-top: none; border-radius: 0 0 6px 6px;">
+    <p>Estimado/a <strong>{customer_name}</strong>,</p>
+
+    <p>Adjunto encontrará la factura electrónica de venta número
+       <strong>{full_number}</strong>.</p>
+
+    <p>El archivo ZIP adjunto contiene:</p>
+    <ul>
+      <li><strong>factura_{full_number}.pdf</strong> &mdash; Representación gráfica de la factura</li>
+      <li><strong>{full_number}_ad.xml</strong> &mdash; XML </li>
+    </ul>
+
+    <div style="background: #eaf4fb; border-left: 4px solid #2980B9; padding: 12px 16px; margin: 16px 0;">
+      <p style="margin: 0; font-size: 13px;"><strong>Total:</strong> {total}</p>
+      <p style="margin: 4px 0 0; font-size: 12px; color: #555;">
+        <strong>CUFE:</strong><br/>
+        <code style="font-size: 10px; word-break: break-all;">{cufe}</code>
+      </p>
+    </div>
+
+    <p style="font-size: 12px; color: #27AE60; font-weight: bold;">
+      &#10003; Este documento fue validado por la DIAN
+    </p>
+
+    <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0;">
+    <p style="font-size: 11px; color: #999; margin: 0;">
+      Este mensaje es generado automáticamente. Por favor no responda a este correo.
+    </p>
+  </div>
+
+</body>
+</html>

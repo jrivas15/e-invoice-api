@@ -1,4 +1,8 @@
 asgiref==3.11.1
+resend==2.10.0
+reportlab==4.4.1
+qrcode==8.1
+pillow==11.2.1
 certifi==2026.2.25
 cffi==2.0.0
 charset-normalizer==3.4.7

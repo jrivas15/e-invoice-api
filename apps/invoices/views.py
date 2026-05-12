@@ -103,3 +103,32 @@ class InvoiceDetailView(APIView):
             'dian_response': invoice.dian_response,
             'created_at': invoice.created_at,
         })
+
+
+class InvoiceResendEmailView(APIView):
+
+    def post(self, request, invoice_id):
+        """Reenvía el email de la factura al cliente. Usa GetStatus de la DIAN para obtener el ApplicationResponse."""
+        repo = InvoiceRepository(request.tenant)
+        invoice = repo.get_by_id(invoice_id)
+        if not invoice:
+            return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+        if invoice.status != Invoice.Status.ACCEPTED:
+            return Response(
+                {'error': 'Solo se pueden reenviar facturas aceptadas por la DIAN'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        override_email = (request.data.get('email') or '').strip()
+
+        from core.email_service import send_invoice_email
+        config = FiscalConfig.objects.get(tenant=request.tenant)
+        ok = send_invoice_email(invoice, config, override_email=override_email or None)
+
+        if ok:
+            recipient = override_email or (invoice.customer or {}).get('email', '')
+            return Response({'message': f'Email reenviado para {invoice.full_number}', 'recipient': recipient})
+        return Response(
+            {'error': 'No se pudo enviar el email. Revisa los logs y que el cliente tenga email registrado.'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
