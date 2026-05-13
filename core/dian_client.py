@@ -430,7 +430,7 @@ def _parse_response(soap_response: str, zip_filename: str = '') -> dict:
             try:
                 ar_xml = base64.b64decode(b64_node.text.strip())
                 label = zip_filename[:-4] if zip_filename else 'unknown'
-                _save_debug(ar_xml.decode('utf-8', errors='replace'), f'application_response_{label}.xml')
+                # _save_debug(ar_xml.decode('utf-8', errors='replace'), f'application_response_{label}.xml')
                 ar_root = etree.fromstring(ar_xml)
                 CBC = 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2'
                 CAC = 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2'

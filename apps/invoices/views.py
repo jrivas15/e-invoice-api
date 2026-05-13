@@ -45,7 +45,12 @@ class InvoiceListView(APIView):
 
         threading.Thread(target=process_invoice, args=(str(invoice.id),)).start()
 
-        return Response({'id': str(invoice.id), 'status': invoice.status}, status=status.HTTP_201_CREATED)
+        return Response({
+            'id': str(invoice.id),
+            'full_number': invoice.full_number,
+            'status': invoice.status,
+            'message': 'Factura recibida y en procesamiento',
+        }, status=status.HTTP_201_CREATED)
 
     def get(self, request):
         """List invoices for this tenant — ordered by created_at desc, paginated."""
@@ -69,12 +74,13 @@ class InvoiceListView(APIView):
         invoices = qs[offset: offset + per_page]
 
         data = [
-            { 
+            {
                 'id': str(i.id),
                 'full_number': i.full_number,
                 'status': i.status,
                 'total': str(i.total),
-                'customer_name': (i.customer or {}).get('legalName'),
+                'customer_name': (i.customer or {}).get('legal_name'),
+                'external_reference': i.external_reference or None,
                 'created_at': i.created_at,
             }
             for i in invoices
@@ -88,6 +94,16 @@ class InvoiceListView(APIView):
         })
 
 
+STATUS_MESSAGES = {
+    'pending':    'Factura recibida, pendiente de envío a la DIAN',
+    'processing': 'Factura en proceso de envío a la DIAN',
+    'sent':       'Factura enviada a la DIAN, esperando respuesta',
+    'accepted':   'Factura aceptada por la DIAN',
+    'rejected':   'Factura rechazada por la DIAN',
+    'error':      'Error interno al procesar la factura',
+}
+
+
 class InvoiceDetailView(APIView):
 
     def get(self, request, invoice_id):
@@ -95,13 +111,27 @@ class InvoiceDetailView(APIView):
         invoice = repo.get_by_id(invoice_id)
         if not invoice:
             return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+        dian = invoice.dian_response or {}
         return Response({
-            'id': str(invoice.id),
-            'full_number': invoice.full_number,
-            'status': invoice.status,
-            'cufe': invoice.cufe,
-            'dian_response': invoice.dian_response,
-            'created_at': invoice.created_at,
+            'id':               str(invoice.id),
+            'full_number':      invoice.full_number,
+            'status':           invoice.status,
+            'message':          STATUS_MESSAGES.get(invoice.status, invoice.status),
+            'dian_code':        dian.get('code'),
+            'dian_status':      dian.get('status_description'),
+            'dian_message':     dian.get('status_message'),
+            'notifications':    dian.get('notifications', []),
+            'validation_lines': dian.get('validation_lines', []),
+            'cufe':             invoice.cufe,
+            'customer':         invoice.customer or None,
+            'items':            invoice.items or [],
+            'subtotal':         str(invoice.subtotal),
+            'discounts':        str(invoice.discounts),
+            'taxes':            str(invoice.taxes),
+            'total':            str(invoice.total),
+            'external_reference': invoice.external_reference or None,
+            'processed_at':     invoice.processed_at,
+            'created_at':       invoice.created_at,
         })
 
 
