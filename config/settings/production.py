@@ -4,6 +4,11 @@ DEBUG = False
 
 ALLOWED_HOSTS = [h for h in os.environ.get('ALLOWED_HOSTS', '').split(',') if h]
 
+# --- CORS ---
+CORS_ALLOWED_ORIGINS = [
+    o for o in os.environ.get('CORS_ALLOWED_ORIGINS', '').split(',') if o
+]
+
 # --- Security headers ---
 SECURE_SSL_REDIRECT = os.environ.get('SECURE_SSL_REDIRECT', 'True') == 'True'
 SECURE_HSTS_SECONDS = 31536000

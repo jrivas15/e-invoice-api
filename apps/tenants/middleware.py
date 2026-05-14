@@ -8,7 +8,7 @@ class TenantAuthMiddleware:
     Attaches tenant to request.tenant.
     Exempt paths: /admin/, /health/
     """
-    EXEMPT_PATHS = ('/admin/', '/health/')
+    EXEMPT_PATHS = ('/jmanage/', '/health/')
 
     def __init__(self, get_response):
         self.get_response = get_response
