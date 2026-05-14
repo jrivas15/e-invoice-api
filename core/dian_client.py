@@ -7,9 +7,12 @@ All ZIP/SOAP work done in memory (no disk I/O).
 import base64
 import hashlib
 import io
+import logging
 import uuid
 import zipfile
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 import requests
 from cryptography.hazmat.primitives import hashes, serialization
@@ -201,7 +204,7 @@ def send_to_dian(
             timeout=60,
             verify=True,
         )
-        print(f'DIAN response status: {resp.status_code}')
+        logger.debug('DIAN response status: %s', resp.status_code)
         # print(f'DIAN response body: {resp.text}')
         # _save_debug(resp.text, f'dian_response_{zip_filename[:-4]}.xml')
         resp.raise_for_status()
@@ -468,23 +471,10 @@ def _parse_response(soap_response: str, zip_filename: str = '') -> dict:
             'application_response_xml': ar_xml_str,
         }
 
-        # Pretty-print to console for debugging
-        print(f'\n{"="*60}')
-        print(f'DIAN Response — is_valid={is_valid}  code={result_dict["code"]}')
-        print(f'  {status_desc}')
-        if status_msg and status_msg != status_desc:
-            print(f'  {status_msg}')
-        if doc_key:
-            print(f'  DocumentKey: {doc_key}')
-        if notifications:
-            print(f'  Notifications ({len(notifications)}):')
-            for n in notifications:
-                print(f'    • {n}')
-        if validation_lines:
-            print(f'  Validation lines ({len(validation_lines)}):')
-            for v in validation_lines:
-                print(f'    [{v["line"]}] {v["rule"]}: {v["description"]}')
-        print('='*60)
+        logger.info(
+            'DIAN Response — is_valid=%s code=%s desc=%s',
+            is_valid, result_dict['code'], status_desc,
+        )
 
         return result_dict
 

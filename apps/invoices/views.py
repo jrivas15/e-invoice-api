@@ -1,6 +1,9 @@
+import logging
 import threading
 
 from django.utils import timezone
+
+logger = logging.getLogger(__name__)
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -25,7 +28,7 @@ class InvoiceListView(APIView):
         cert = Certificate.objects.get(tenant=tenant, active=True)
 
         full_number, number = get_next_number(tenant)
-        print(request.data)
+        logger.debug('POST /invoices payload tenant=%s', tenant.id)
         invoice = Invoice.objects.create(
             tenant=tenant,
             certificate=cert,

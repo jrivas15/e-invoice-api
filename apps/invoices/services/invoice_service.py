@@ -1,6 +1,9 @@
+import logging
 from datetime import timedelta
 
 from django.db.models import F
+
+logger = logging.getLogger(__name__)
 from django.utils import timezone
 
 from apps.invoices.models import Invoice, RetryQueue, MonthlyUsage
@@ -59,21 +62,17 @@ def process_invoice(invoice_id: str):
         _update_monthly_usage(tenant, success=(invoice.status == Invoice.Status.ACCEPTED))
 
         if invoice.status == Invoice.Status.ACCEPTED:
-            print(f'[process_invoice] Invoice {invoice.id} accepted by DIAN. Attempting to send email...')
+            logger.info('Invoice %s accepted by DIAN. Sending email...', invoice.id)
             try:
                 from core.email_service import send_invoice_email
                 ar_xml = response.get('application_response_xml', '')
                 ok = send_invoice_email(invoice, config, application_response_xml=ar_xml)
-                print(f'[process_invoice] Email sent for invoice {invoice.id} status={ok}')
+                logger.info('Email sent for invoice %s status=%s', invoice.id, ok)
             except Exception as email_exc:
-                import traceback
-                print(f'[process_invoice] Email failed for invoice={invoice_id}: {email_exc}')
-                traceback.print_exc()
+                logger.error('Email failed for invoice %s: %s', invoice_id, email_exc, exc_info=True)
 
     except Exception as e:
-        import traceback
-        print(f'[process_invoice] ERROR invoice={invoice_id}: {e}')
-        traceback.print_exc()
+        logger.error('Processing error for invoice %s: %s', invoice_id, e, exc_info=True)
         invoice.status = Invoice.Status.ERROR
         invoice.save(update_fields=['status'])
         _schedule_retry(invoice, str(e))
