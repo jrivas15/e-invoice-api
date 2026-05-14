@@ -229,7 +229,8 @@ class CertificateInline(admin.TabularInline):
 
 @admin.register(Tenant)
 class TenantAdmin(admin.ModelAdmin):
-    list_display    = ('name', 'active', 'created_at', 'api_key_button', 'test_invoice_button')
+    list_display    = ('name', 'active', 'created_at', 'api_key_button',
+                       'test_invoice_button', 'resolution_button')
     list_filter     = ('active',)
     search_fields   = ('name',)
     readonly_fields = ('id', 'api_key_hash', 'created_at')
@@ -256,6 +257,13 @@ class TenantAdmin(admin.ModelAdmin):
         )
     test_invoice_button.short_description = 'Set de pruebas'
 
+    def resolution_button(self, obj):
+        url = reverse('admin:tenant-resolution', args=[obj.pk])
+        return format_html(
+            '<a class="button" href="{}">📋 Consultar resolución DIAN</a>', url
+        )
+    resolution_button.short_description = 'Resolución'
+
     def get_urls(self):
         urls   = super().get_urls()
         custom = [
@@ -268,6 +276,11 @@ class TenantAdmin(admin.ModelAdmin):
                 '<uuid:pk>/test-invoice/',
                 self.admin_site.admin_view(self._test_invoice_view),
                 name='tenant-test-invoice',
+            ),
+            path(
+                '<uuid:pk>/resolution/',
+                self.admin_site.admin_view(self._resolution_view),
+                name='tenant-resolution',
             ),
         ]
         return custom + urls
@@ -410,6 +423,87 @@ class TenantAdmin(admin.ModelAdmin):
                 level=messages.ERROR,
             )
 
+        return redirect
+
+    def _resolution_view(self, request, pk):
+        """Consulta DIAN GetNumberingRange y muestra las resoluciones autorizadas."""
+        from core.cert_service import load_certificate
+        from core.dian_client import get_numbering_range
+
+        tenant = Tenant.objects.get(pk=pk)
+        redirect = HttpResponseRedirect(
+            reverse('admin:tenants_tenant_change', args=[pk])
+        )
+
+        try:
+            config = FiscalConfig.objects.get(tenant=tenant)
+        except FiscalConfig.DoesNotExist:
+            self.message_user(request, 'El tenant no tiene FiscalConfig.',
+                              level=messages.ERROR)
+            return redirect
+
+        if not config.software_id:
+            self.message_user(
+                request,
+                'Falta software_id en FiscalConfig → Software DIAN.',
+                level=messages.ERROR,
+            )
+            return redirect
+
+        try:
+            load_certificate(tenant)
+        except Certificate.DoesNotExist:
+            self.message_user(request, 'El tenant no tiene certificado activo.',
+                              level=messages.ERROR)
+            return redirect
+
+        try:
+            p12, password = load_certificate(tenant)
+            resolutions = get_numbering_range(p12, password, config)
+        except Exception as exc:
+            self.message_user(
+                request, f'Error consultando DIAN: {exc}',
+                level=messages.ERROR,
+            )
+            return redirect
+
+        if not resolutions:
+            self.message_user(
+                request,
+                'DIAN no devolvió resoluciones para este NIT/software.',
+                level=messages.WARNING,
+            )
+            return redirect
+
+        rows = ''.join(
+            '<tr>'
+            f'<td>{r["resolution_number"]}</td>'
+            f'<td>{r["prefix"]}</td>'
+            f'<td>{r["from_number"]} – {r["to_number"]}</td>'
+            f'<td>{r["valid_date_from"]} → {r["valid_date_to"]}</td>'
+            f'<td><code style="font-size:11px">{r["technical_key"][:20]}…</code></td>'
+            '</tr>'
+            for r in resolutions
+        )
+        html = (
+            '<table style="border-collapse:collapse;font-size:12px;margin-top:6px">'
+            '<thead><tr style="background:#eee">'
+            '<th style="padding:4px 8px">Resolución</th>'
+            '<th style="padding:4px 8px">Prefijo</th>'
+            '<th style="padding:4px 8px">Rango</th>'
+            '<th style="padding:4px 8px">Vigencia</th>'
+            '<th style="padding:4px 8px">Clave técnica</th>'
+            '</tr></thead>'
+            f'<tbody>{rows}</tbody></table>'
+        )
+        self.message_user(
+            request,
+            format_html(
+                '<strong>Resoluciones DIAN ({} encontradas)</strong>{}',
+                len(resolutions), mark_safe(html),
+            ),
+            level=messages.SUCCESS,
+        )
         return redirect
 
 

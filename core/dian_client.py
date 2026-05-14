@@ -40,9 +40,10 @@ SOAP_NS  = 'http://www.w3.org/2003/05/soap-envelope'
 WSA_NS   = 'http://www.w3.org/2005/08/addressing'
 EXC_C14N = 'http://www.w3.org/2001/10/xml-exc-c14n#'
 EC_NS    = 'http://www.w3.org/2001/10/xml-exc-c14n#'
-SEND_BILL_SYNC_ACTION      = 'http://wcf.dian.colombia/IWcfDianCustomerServices/SendBillSync'
-GET_STATUS_ACTION          = 'http://wcf.dian.colombia/IWcfDianCustomerServices/GetStatus'
-SEND_TEST_SET_ASYNC_ACTION = 'http://wcf.dian.colombia/IWcfDianCustomerServices/SendTestSetAsync'
+SEND_BILL_SYNC_ACTION       = 'http://wcf.dian.colombia/IWcfDianCustomerServices/SendBillSync'
+GET_STATUS_ACTION           = 'http://wcf.dian.colombia/IWcfDianCustomerServices/GetStatus'
+SEND_TEST_SET_ASYNC_ACTION  = 'http://wcf.dian.colombia/IWcfDianCustomerServices/SendTestSetAsync'
+GET_NUMBERING_RANGE_ACTION  = 'http://wcf.dian.colombia/IWcfDianCustomerServices/GetNumberingRange'
 
 
 def send_to_dian(
@@ -546,6 +547,154 @@ def get_application_response(cufe: str, p12_bytes: bytes, cert_password: str, co
         raise RuntimeError(f'GetStatus: no XmlBase64Bytes in response for CUFE={cufe}')
 
     return base64.b64decode(b64_node.text.strip()).decode('utf-8', errors='replace')
+
+
+def get_numbering_range(p12_bytes: bytes, cert_password: str, config) -> list[dict]:
+    """
+    Consulta la operación GetNumberingRange de la DIAN — devuelve las
+    resoluciones de facturación autorizadas para el emisor.
+
+    Returns
+    -------
+    list[dict] con claves: resolution_number, resolution_date, prefix,
+        from_number, to_number, valid_date_from, valid_date_to, technical_key
+    """
+    from datetime import timedelta
+
+    ambiente = getattr(config, 'ambiente', 'PRUEBAS')
+    endpoint = ENDPOINTS.get(ambiente, ENDPOINTS['PRUEBAS'])
+
+    pfx         = pkcs12.load_pkcs12(p12_bytes, cert_password.encode())
+    private_key = pfx.key
+    cert        = pfx.cert.certificate
+    cert_der    = cert.public_bytes(serialization.Encoding.DER)
+    cert_b64    = base64.b64encode(cert_der).decode()
+
+    token_id  = 'X509-' + uuid.uuid4().hex.upper()
+    ts_id     = 'TS-'   + uuid.uuid4().hex.upper()
+    sig_id    = 'SIG-'  + uuid.uuid4().hex.upper()
+    ki_id     = 'KI-'   + uuid.uuid4().hex.upper()
+    str_id    = 'STR-'  + uuid.uuid4().hex.upper()
+    wsa_to_id = 'id-'   + uuid.uuid4().hex.upper()
+
+    now     = datetime.now(timezone.utc)
+    created = now.strftime('%Y-%m-%dT%H:%M:%SZ')
+    expires = (now + timedelta(seconds=60)).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+    wsa_to_xml = (
+        f'<wsa:To'
+        f' xmlns:soap="{SOAP_NS}"'
+        f' xmlns:wcf="http://wcf.dian.colombia"'
+        f' xmlns:wsa="{WSA_NS}"'
+        f' xmlns:wsu="{WSU_NS}"'
+        f' wsu:Id="{wsa_to_id}">{endpoint}</wsa:To>'
+    )
+    wsa_to_digest = base64.b64encode(
+        hashlib.sha256(wsa_to_xml.encode('utf-8')).digest()
+    ).decode()
+
+    ts_xml = (
+        f'<wsu:Timestamp wsu:Id="{ts_id}">'
+        f'<wsu:Created>{created}</wsu:Created>'
+        f'<wsu:Expires>{expires}</wsu:Expires>'
+        f'</wsu:Timestamp>'
+    )
+
+    signed_info_content = (
+        f'<ds:CanonicalizationMethod Algorithm="{EXC_C14N}">'
+        f'<ec:InclusiveNamespaces xmlns:ec="{EC_NS}" PrefixList="wsa soap wcf"></ec:InclusiveNamespaces>'
+        f'</ds:CanonicalizationMethod>'
+        f'<ds:SignatureMethod Algorithm="http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"></ds:SignatureMethod>'
+        f'<ds:Reference URI="#{wsa_to_id}">'
+        f'<ds:Transforms><ds:Transform Algorithm="{EXC_C14N}">'
+        f'<ec:InclusiveNamespaces xmlns:ec="{EC_NS}" PrefixList="soap wcf"></ec:InclusiveNamespaces>'
+        f'</ds:Transform></ds:Transforms>'
+        f'<ds:DigestMethod Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"></ds:DigestMethod>'
+        f'<ds:DigestValue>{wsa_to_digest}</ds:DigestValue>'
+        f'</ds:Reference>'
+    )
+    signed_info_for_signing = (
+        f'<ds:SignedInfo'
+        f' xmlns:ds="{DS_NS}" xmlns:soap="{SOAP_NS}"'
+        f' xmlns:wcf="http://wcf.dian.colombia" xmlns:wsa="{WSA_NS}">'
+        f'{signed_info_content}'
+        f'</ds:SignedInfo>'
+    )
+    sig_bytes = private_key.sign(
+        signed_info_for_signing.encode('utf-8'), padding.PKCS1v15(), hashes.SHA256()
+    )
+    sig_value = base64.b64encode(sig_bytes).decode()
+    signed_info_for_doc = f'<ds:SignedInfo>{signed_info_content}</ds:SignedInfo>'
+
+    soap_envelope = (
+        f'<soap:Envelope xmlns:soap="{SOAP_NS}" xmlns:wcf="http://wcf.dian.colombia">'
+        f'<soap:Header xmlns:wsa="{WSA_NS}">'
+        f'<wsse:Security xmlns:wsse="{WSSE_NS}" xmlns:wsu="{WSU_NS}">'
+        f'{ts_xml}'
+        f'<wsse:BinarySecurityToken'
+        f' EncodingType="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary"'
+        f' ValueType="{WSS_X509_TOKEN_PROFILE}"'
+        f' wsu:Id="{token_id}">{cert_b64}</wsse:BinarySecurityToken>'
+        f'<ds:Signature Id="{sig_id}" xmlns:ds="{DS_NS}">'
+        f'{signed_info_for_doc}'
+        f'<ds:SignatureValue>{sig_value}</ds:SignatureValue>'
+        f'<ds:KeyInfo Id="{ki_id}"><wsse:SecurityTokenReference wsu:Id="{str_id}">'
+        f'<wsse:Reference URI="#{token_id}" ValueType="{WSS_X509_TOKEN_PROFILE}"/>'
+        f'</wsse:SecurityTokenReference></ds:KeyInfo>'
+        f'</ds:Signature>'
+        f'</wsse:Security>'
+        f'<wsa:Action>{GET_NUMBERING_RANGE_ACTION}</wsa:Action>'
+        f'<wsa:To wsu:Id="{wsa_to_id}" xmlns:wsu="{WSU_NS}">{endpoint}</wsa:To>'
+        f'</soap:Header>'
+        f'<soap:Body>'
+        f'<wcf:GetNumberingRange>'
+        f'<wcf:accountCode>{config.nit}</wcf:accountCode>'
+        f'<wcf:accountCodeT>{config.nit}</wcf:accountCodeT>'
+        f'<wcf:softwareCode>{config.software_id}</wcf:softwareCode>'
+        f'</wcf:GetNumberingRange>'
+        f'</soap:Body>'
+        f'</soap:Envelope>'
+    )
+
+    headers = {
+        'Accept':          'application/xml',
+        'Content-Type':    'application/soap+xml',
+        'Content-Length':  str(len(soap_envelope.encode('utf-8'))),
+        'SOAPAction':      GET_NUMBERING_RANGE_ACTION,
+        'Accept-Encoding': 'gzip,deflate',
+    }
+    resp = requests.post(endpoint, data=soap_envelope.encode('utf-8'),
+                         headers=headers, timeout=30, verify=True)
+    resp.raise_for_status()
+
+    return _parse_numbering_range(resp.text)
+
+
+def _parse_numbering_range(soap_response: str) -> list[dict]:
+    """Extrae las resoluciones del response de GetNumberingRange."""
+    from lxml import etree
+    root = etree.fromstring(soap_response.encode('utf-8'))
+    NS = 'http://schemas.datacontract.org/2004/07/DianResponse'
+
+    def _txt(parent, tag):
+        node = parent.find(f'{{{NS}}}{tag}')
+        return (node.text or '').strip() if node is not None and node.text else ''
+
+    results = []
+    for item in root.iter(f'{{{NS}}}NumberRangeResponse'):
+        results.append({
+            'resolution_number': _txt(item, 'ResolutionNumber'),
+            'resolution_date':   _txt(item, 'ResolutionDate'),
+            'prefix':            _txt(item, 'Prefix'),
+            'from_number':       _txt(item, 'FromNumber'),
+            'to_number':         _txt(item, 'ToNumber'),
+            'valid_date_from':   _txt(item, 'ValidDateFrom'),
+            'valid_date_to':     _txt(item, 'ValidDateTo'),
+            'technical_key':     _txt(item, 'TechnicalKey'),
+        })
+
+    logger.info('GetNumberingRange — %d resoluciones encontradas', len(results))
+    return results
 
 
 # ---------------------------------------------------------------------------
