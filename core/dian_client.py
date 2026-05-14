@@ -40,8 +40,9 @@ SOAP_NS  = 'http://www.w3.org/2003/05/soap-envelope'
 WSA_NS   = 'http://www.w3.org/2005/08/addressing'
 EXC_C14N = 'http://www.w3.org/2001/10/xml-exc-c14n#'
 EC_NS    = 'http://www.w3.org/2001/10/xml-exc-c14n#'
-SEND_BILL_SYNC_ACTION = 'http://wcf.dian.colombia/IWcfDianCustomerServices/SendBillSync'
-GET_STATUS_ACTION     = 'http://wcf.dian.colombia/IWcfDianCustomerServices/GetStatus'
+SEND_BILL_SYNC_ACTION      = 'http://wcf.dian.colombia/IWcfDianCustomerServices/SendBillSync'
+GET_STATUS_ACTION          = 'http://wcf.dian.colombia/IWcfDianCustomerServices/GetStatus'
+SEND_TEST_SET_ASYNC_ACTION = 'http://wcf.dian.colombia/IWcfDianCustomerServices/SendTestSetAsync'
 
 
 def send_to_dian(
@@ -222,6 +223,199 @@ def send_to_dian(
             'code': '99',
             'errors': [str(exc)],
             'status_msg': 'Connection error',
+        }
+
+
+def send_to_test_set(
+    signed_xml: str,
+    p12_bytes: bytes,
+    cert_password: str,
+    config,
+    test_set_id: str,
+) -> dict:
+    """
+    Envía una factura firmada al set de pruebas DIAN (operación SendTestSetAsync).
+    El endpoint siempre es PRUEBAS — el set de pruebas solo existe en habilitación.
+
+    Returns
+    -------
+    dict con claves: code ('00'|'99'), zip_key, errors, status_msg
+    """
+    endpoint = ENDPOINTS['PRUEBAS']
+
+    pfx         = pkcs12.load_pkcs12(p12_bytes, cert_password.encode())
+    private_key = pfx.key
+    cert        = pfx.cert.certificate
+    cert_der    = cert.public_bytes(serialization.Encoding.DER)
+    cert_b64    = base64.b64encode(cert_der).decode()
+
+    zip_filename = _zip_filename(config, signed_xml)
+    xml_filename = zip_filename[:-4] + '.xml'
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(xml_filename, signed_xml.encode('utf-8'))
+    zip_b64 = base64.b64encode(buf.getvalue()).decode()
+
+    token_id  = 'X509-' + uuid.uuid4().hex.upper()
+    ts_id     = 'TS-'   + uuid.uuid4().hex.upper()
+    sig_id    = 'SIG-'  + uuid.uuid4().hex.upper()
+    ki_id     = 'KI-'   + uuid.uuid4().hex.upper()
+    str_id    = 'STR-'  + uuid.uuid4().hex.upper()
+    wsa_to_id = 'id-'   + uuid.uuid4().hex.upper()
+
+    from datetime import timedelta
+    now     = datetime.now(timezone.utc)
+    created = now.strftime('%Y-%m-%dT%H:%M:%SZ')
+    expires = (now + timedelta(seconds=60)).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+    wsa_to_xml = (
+        f'<wsa:To'
+        f' xmlns:soap="{SOAP_NS}"'
+        f' xmlns:wcf="http://wcf.dian.colombia"'
+        f' xmlns:wsa="{WSA_NS}"'
+        f' xmlns:wsu="{WSU_NS}"'
+        f' wsu:Id="{wsa_to_id}">{endpoint}</wsa:To>'
+    )
+    wsa_to_digest = base64.b64encode(
+        hashlib.sha256(wsa_to_xml.encode('utf-8')).digest()
+    ).decode()
+
+    ts_xml = (
+        f'<wsu:Timestamp wsu:Id="{ts_id}">'
+        f'<wsu:Created>{created}</wsu:Created>'
+        f'<wsu:Expires>{expires}</wsu:Expires>'
+        f'</wsu:Timestamp>'
+    )
+
+    signed_info_content = (
+        f'<ds:CanonicalizationMethod Algorithm="{EXC_C14N}">'
+        f'<ec:InclusiveNamespaces xmlns:ec="{EC_NS}" PrefixList="wsa soap wcf"></ec:InclusiveNamespaces>'
+        f'</ds:CanonicalizationMethod>'
+        f'<ds:SignatureMethod Algorithm="http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"></ds:SignatureMethod>'
+        f'<ds:Reference URI="#{wsa_to_id}">'
+        f'<ds:Transforms><ds:Transform Algorithm="{EXC_C14N}">'
+        f'<ec:InclusiveNamespaces xmlns:ec="{EC_NS}" PrefixList="soap wcf"></ec:InclusiveNamespaces>'
+        f'</ds:Transform></ds:Transforms>'
+        f'<ds:DigestMethod Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"></ds:DigestMethod>'
+        f'<ds:DigestValue>{wsa_to_digest}</ds:DigestValue>'
+        f'</ds:Reference>'
+    )
+    signed_info_for_signing = (
+        f'<ds:SignedInfo'
+        f' xmlns:ds="{DS_NS}" xmlns:soap="{SOAP_NS}"'
+        f' xmlns:wcf="http://wcf.dian.colombia" xmlns:wsa="{WSA_NS}">'
+        f'{signed_info_content}'
+        f'</ds:SignedInfo>'
+    )
+    sig_bytes = private_key.sign(
+        signed_info_for_signing.encode('utf-8'), padding.PKCS1v15(), hashes.SHA256()
+    )
+    sig_value = base64.b64encode(sig_bytes).decode()
+    signed_info_for_doc = f'<ds:SignedInfo>{signed_info_content}</ds:SignedInfo>'
+
+    soap_envelope = (
+        f'<soap:Envelope xmlns:soap="{SOAP_NS}" xmlns:wcf="http://wcf.dian.colombia">'
+        f'<soap:Header xmlns:wsa="{WSA_NS}">'
+        f'<wsse:Security xmlns:wsse="{WSSE_NS}" xmlns:wsu="{WSU_NS}">'
+        f'{ts_xml}'
+        f'<wsse:BinarySecurityToken'
+        f' EncodingType="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary"'
+        f' ValueType="{WSS_X509_TOKEN_PROFILE}"'
+        f' wsu:Id="{token_id}">{cert_b64}</wsse:BinarySecurityToken>'
+        f'<ds:Signature Id="{sig_id}" xmlns:ds="{DS_NS}">'
+        f'{signed_info_for_doc}'
+        f'<ds:SignatureValue>{sig_value}</ds:SignatureValue>'
+        f'<ds:KeyInfo Id="{ki_id}"><wsse:SecurityTokenReference wsu:Id="{str_id}">'
+        f'<wsse:Reference URI="#{token_id}" ValueType="{WSS_X509_TOKEN_PROFILE}"/>'
+        f'</wsse:SecurityTokenReference></ds:KeyInfo>'
+        f'</ds:Signature>'
+        f'</wsse:Security>'
+        f'<wsa:Action>{SEND_TEST_SET_ASYNC_ACTION}</wsa:Action>'
+        f'<wsa:To wsu:Id="{wsa_to_id}" xmlns:wsu="{WSU_NS}">{endpoint}</wsa:To>'
+        f'</soap:Header>'
+        f'<soap:Body>'
+        f'<wcf:SendTestSetAsync>'
+        f'<wcf:fileName>{zip_filename}</wcf:fileName>'
+        f'<wcf:contentFile>{zip_b64}</wcf:contentFile>'
+        f'<wcf:testSetId>{test_set_id}</wcf:testSetId>'
+        f'</wcf:SendTestSetAsync>'
+        f'</soap:Body>'
+        f'</soap:Envelope>'
+    )
+
+    headers = {
+        'Accept':          'application/xml',
+        'Content-Type':    'application/soap+xml',
+        'Content-Length':  str(len(soap_envelope.encode('utf-8'))),
+        'SOAPAction':      SEND_TEST_SET_ASYNC_ACTION,
+        'Accept-Encoding': 'gzip,deflate',
+    }
+    try:
+        resp = requests.post(
+            endpoint, data=soap_envelope.encode('utf-8'),
+            headers=headers, timeout=60, verify=True,
+        )
+        logger.debug('DIAN SendTestSetAsync response status: %s', resp.status_code)
+        resp.raise_for_status()
+        return _parse_test_set_response(resp.text)
+    except requests.exceptions.HTTPError as exc:
+        return {
+            'code': '99',
+            'zip_key': '',
+            'errors': [str(exc)],
+            'status_msg': f'HTTP error: {exc.response.status_code}',
+        }
+    except requests.exceptions.RequestException as exc:
+        return {
+            'code': '99',
+            'zip_key': '',
+            'errors': [str(exc)],
+            'status_msg': 'Connection error',
+        }
+
+
+def _parse_test_set_response(soap_response: str) -> dict:
+    """Parse SendTestSetAsync SOAP response → {code, zip_key, errors, status_msg}."""
+    try:
+        from lxml import etree
+        root = etree.fromstring(soap_response.encode('utf-8'))
+
+        UPLOAD = 'http://schemas.datacontract.org/2004/07/UploadDocumentResponse'
+        ARR    = 'http://schemas.microsoft.com/2003/10/Serialization/Arrays'
+
+        zip_key = ''
+        for el in root.iter(f'{{{UPLOAD}}}ZipKey'):
+            zip_key = (el.text or '').strip()
+            break
+
+        errors = []
+        for el in root.iter(f'{{{UPLOAD}}}ErrorMessage'):
+            for s in el.findall(f'{{{ARR}}}string'):
+                if s.text and s.text.strip():
+                    errors.append(s.text.strip())
+
+        if zip_key:
+            logger.info('SendTestSetAsync OK — ZipKey=%s', zip_key)
+            return {
+                'code': '00',
+                'zip_key': zip_key,
+                'errors': errors,
+                'status_msg': 'Enviado al set de pruebas',
+            }
+
+        logger.warning('SendTestSetAsync sin ZipKey — errors=%s', errors)
+        return {
+            'code': '99',
+            'zip_key': '',
+            'errors': errors or ['Respuesta sin ZipKey'],
+            'status_msg': 'Set de pruebas rechazó el documento',
+        }
+    except Exception as exc:
+        return {
+            'code': '99',
+            'zip_key': '',
+            'errors': [str(exc)],
+            'status_msg': 'Failed to parse SendTestSetAsync response',
         }
 
 

@@ -112,6 +112,11 @@ class FiscalConfig(models.Model):
         choices=[('PRUEBAS', 'Pruebas'), ('PRODUCCIÓN', 'Producción')],
         default='PRUEBAS',
     )
+    test_set_id = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text='UUID del set de pruebas DIAN. Solo necesario durante habilitación.',
+    )
 
     # Tax scheme of issuer
     tax_scheme_id = models.CharField(max_length=10, default='01', choices=TRIBUTOS)

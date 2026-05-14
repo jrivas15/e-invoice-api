@@ -197,6 +197,7 @@ class FiscalConfigInline(admin.StackedInline):
                 'software_id',
                 'software_pin',
                 'clave_tecnica',
+                'test_set_id',
             ),
             'classes': ('collapse',),
         }),
@@ -228,7 +229,7 @@ class CertificateInline(admin.TabularInline):
 
 @admin.register(Tenant)
 class TenantAdmin(admin.ModelAdmin):
-    list_display    = ('name', 'active', 'created_at', 'api_key_button')
+    list_display    = ('name', 'active', 'created_at', 'api_key_button', 'test_invoice_button')
     list_filter     = ('active',)
     search_fields   = ('name',)
     readonly_fields = ('id', 'api_key_hash', 'created_at')
@@ -248,6 +249,13 @@ class TenantAdmin(admin.ModelAdmin):
         )
     api_key_button.short_description = 'API Key'
 
+    def test_invoice_button(self, obj):
+        url = reverse('admin:tenant-test-invoice', args=[obj.pk])
+        return format_html(
+            '<a class="button" href="{}">🧪 Factura prueba + Set DIAN</a>', url
+        )
+    test_invoice_button.short_description = 'Set de pruebas'
+
     def get_urls(self):
         urls   = super().get_urls()
         custom = [
@@ -255,6 +263,11 @@ class TenantAdmin(admin.ModelAdmin):
                 '<uuid:pk>/generate-key/',
                 self.admin_site.admin_view(self._generate_key_view),
                 name='tenant-generate-key',
+            ),
+            path(
+                '<uuid:pk>/test-invoice/',
+                self.admin_site.admin_view(self._test_invoice_view),
+                name='tenant-test-invoice',
             ),
         ]
         return custom + urls
@@ -278,6 +291,126 @@ class TenantAdmin(admin.ModelAdmin):
         return HttpResponseRedirect(
             reverse('admin:tenants_tenant_change', args=[pk])
         )
+
+    def _test_invoice_view(self, request, pk):
+        """Crea factura de 1000 pesos + firma + envía al set de pruebas DIAN."""
+        from django.utils import timezone
+        from apps.invoices.models import Invoice
+        from apps.invoices.services.invoice_service import get_next_number
+        from core.cert_service import load_certificate
+        from core.xml_builder import build_xml
+        from core.signer import sign_xml
+        from core.dian_client import send_to_test_set
+
+        tenant = Tenant.objects.get(pk=pk)
+        redirect = HttpResponseRedirect(
+            reverse('admin:tenants_tenant_change', args=[pk])
+        )
+
+        try:
+            config = FiscalConfig.objects.get(tenant=tenant)
+        except FiscalConfig.DoesNotExist:
+            self.message_user(request, 'El tenant no tiene FiscalConfig.',
+                              level=messages.ERROR)
+            return redirect
+
+        if not config.test_set_id:
+            self.message_user(
+                request,
+                'Configura primero el test_set_id en "Software DIAN" del FiscalConfig.',
+                level=messages.ERROR,
+            )
+            return redirect
+
+        try:
+            cert = Certificate.objects.get(tenant=tenant, active=True)
+        except Certificate.DoesNotExist:
+            self.message_user(request, 'El tenant no tiene certificado activo.',
+                              level=messages.ERROR)
+            return redirect
+
+        full_number, number = get_next_number(tenant)
+        invoice = Invoice.objects.create(
+            tenant=tenant,
+            certificate=cert,
+            prefix=config.invoice_prefix,
+            number=number,
+            full_number=full_number,
+            invoice_date=timezone.now().date(),
+            customer={
+                'person_type':     '2',
+                'document_type':   '13',
+                'document_number': '222222222222',
+                'legal_name':      'Consumidor Final',
+                'address':         'Calle 1 # 1-1',
+                'tax_level_code':  'R-99-PN',
+                'tax_scheme_id':   'ZZ',
+                'tax_scheme_name': 'No aplica',
+                'email':           '',
+                'phone':           '',
+            },
+            items=[{
+                'description': 'Producto de prueba',
+                'quantity':    1,
+                'unit_price':  1000,
+                'discount':    0,
+                'taxes': [{'tax_type': '01', 'rate': 19}],
+            }],
+            subtotal=1000,
+            discounts=0,
+            taxes=190,
+            total=1190,
+            payment_means_code='10',
+            external_reference='TEST-SET',
+        )
+
+        try:
+            p12, password = load_certificate(tenant)
+            xml, cufe, qr_data = build_xml(invoice, config)
+            signed_xml = sign_xml(xml, p12, password)
+
+            invoice.signed_xml = signed_xml
+            invoice.cufe       = cufe
+            invoice.qr_data    = qr_data
+            invoice.save(update_fields=['signed_xml', 'cufe', 'qr_data'])
+
+            result = send_to_test_set(
+                signed_xml, p12, password, config, config.test_set_id,
+            )
+        except Exception as exc:
+            invoice.status = Invoice.Status.ERROR
+            invoice.save(update_fields=['status'])
+            self.message_user(
+                request,
+                f'Falló al construir/firmar la factura {full_number}: {exc}',
+                level=messages.ERROR,
+            )
+            return redirect
+
+        invoice.dian_response = result
+        if result.get('code') == '00':
+            invoice.status = Invoice.Status.SENT
+            invoice.save(update_fields=['status', 'dian_response'])
+            self.message_user(
+                request,
+                format_html(
+                    'Factura <strong>{}</strong> enviada al set DIAN. '
+                    '<strong>ZipKey:</strong> <code>{}</code>',
+                    full_number, result.get('zip_key', ''),
+                ),
+                level=messages.SUCCESS,
+            )
+        else:
+            invoice.status = Invoice.Status.REJECTED
+            invoice.save(update_fields=['status', 'dian_response'])
+            errs = '; '.join(result.get('errors', [])) or result.get('status_msg', 'Sin detalle')
+            self.message_user(
+                request,
+                f'Factura {full_number} rechazada por el set DIAN: {errs}',
+                level=messages.ERROR,
+            )
+
+        return redirect
 
 
 # ---------------------------------------------------------------------------
