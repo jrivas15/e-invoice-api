@@ -1,0 +1,78 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block title %}Resoluciones DIAN — {{ tenant.name }}{% endblock %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+  <a href="{% url 'admin:index' %}">Admin</a>
+  &rsaquo; <a href="{% url 'admin:tenants_tenant_changelist' %}">Tenants</a>
+  &rsaquo; <a href="{% url 'admin:tenants_tenant_change' tenant.pk %}">{{ tenant.name }}</a>
+  &rsaquo; Resoluciones DIAN
+</div>
+{% endblock %}
+
+{% block content %}
+<h1>Resoluciones autorizadas — {{ tenant.name }}</h1>
+<p style="color:#666">NIT <code>{{ config.nit }}</code> · Software <code>{{ config.software_id }}</code> · Ambiente <code>{{ config.ambiente }}</code></p>
+
+{% if resolutions %}
+<p>{{ resolutions|length }} resolución(es) encontrada(s).</p>
+
+{% for r in resolutions %}
+<div style="border:1px solid #ddd;border-radius:6px;padding:16px;margin-bottom:16px;background:#fff">
+  <h2 style="margin-top:0;color:#417690">Resolución {{ r.resolution_number }}</h2>
+  <table style="width:100%;border-collapse:collapse">
+    <tr>
+      <th style="text-align:left;padding:6px 12px;width:200px;color:#666;font-weight:600">Prefijo</th>
+      <td style="padding:6px 12px;font-family:monospace;font-size:14px">{{ r.prefix|default:"—" }}</td>
+    </tr>
+    <tr style="background:#f8f8f8">
+      <th style="text-align:left;padding:6px 12px;color:#666;font-weight:600">Rango autorizado</th>
+      <td style="padding:6px 12px;font-family:monospace">{{ r.from_number }} → {{ r.to_number }}</td>
+    </tr>
+    <tr>
+      <th style="text-align:left;padding:6px 12px;color:#666;font-weight:600">Fecha resolución</th>
+      <td style="padding:6px 12px">{{ r.resolution_date }}</td>
+    </tr>
+    <tr style="background:#f8f8f8">
+      <th style="text-align:left;padding:6px 12px;color:#666;font-weight:600">Vigencia</th>
+      <td style="padding:6px 12px">{{ r.valid_date_from }} → {{ r.valid_date_to }}</td>
+    </tr>
+    <tr>
+      <th style="text-align:left;padding:6px 12px;color:#666;font-weight:600;vertical-align:top">Clave técnica</th>
+      <td style="padding:6px 12px">
+        <code style="font-size:12px;word-break:break-all;background:#eee;padding:4px 8px;border-radius:3px;display:inline-block">{{ r.technical_key }}</code>
+        <button type="button"
+                onclick="navigator.clipboard.writeText('{{ r.technical_key }}'); this.innerText='✓ Copiada'"
+                style="margin-left:8px;cursor:pointer;padding:4px 10px;background:#417690;color:white;border:none;border-radius:3px">
+          📋 Copiar
+        </button>
+      </td>
+    </tr>
+  </table>
+</div>
+{% endfor %}
+
+{% else %}
+<div style="background:#fff3cd;border:1px solid #ffc107;padding:16px;border-radius:6px;margin:16px 0">
+  <strong>No se encontraron resoluciones.</strong>
+  <p>DIAN no devolvió resoluciones para este NIT/software. Verifica que:</p>
+  <ul>
+    <li>El NIT esté registrado en DIAN para facturación electrónica</li>
+    <li>El <code>software_id</code> sea el asignado por DIAN</li>
+    <li>El ambiente (PRUEBAS/PRODUCCIÓN) sea el correcto</li>
+  </ul>
+  {% if raw_response %}
+  <details>
+    <summary style="cursor:pointer;color:#417690">Ver respuesta cruda de DIAN</summary>
+    <pre style="white-space:pre-wrap;font-size:11px;background:#f8f8f8;padding:8px;border:1px solid #ddd;max-height:400px;overflow:auto;margin-top:8px">{{ raw_response }}</pre>
+  </details>
+  {% endif %}
+</div>
+{% endif %}
+
+<p style="margin-top:24px">
+  <a href="{% url 'admin:tenants_tenant_change' tenant.pk %}" class="button">← Volver al tenant</a>
+</p>
+{% endblock %}

@@ -427,6 +427,7 @@ class TenantAdmin(admin.ModelAdmin):
 
     def _resolution_view(self, request, pk):
         """Consulta DIAN GetNumberingRange y muestra las resoluciones autorizadas."""
+        from django.shortcuts import render
         from core.cert_service import load_certificate
         from core.dian_client import get_numbering_range
 
@@ -451,14 +452,13 @@ class TenantAdmin(admin.ModelAdmin):
             return redirect
 
         try:
-            load_certificate(tenant)
+            p12, password = load_certificate(tenant)
         except Certificate.DoesNotExist:
             self.message_user(request, 'El tenant no tiene certificado activo.',
                               level=messages.ERROR)
             return redirect
 
         try:
-            p12, password = load_certificate(tenant)
             resolutions, raw = get_numbering_range(p12, password, config)
         except Exception as exc:
             self.message_user(
@@ -467,50 +467,15 @@ class TenantAdmin(admin.ModelAdmin):
             )
             return redirect
 
-        if not resolutions:
-            self.message_user(
-                request,
-                format_html(
-                    'DIAN no devolvió resoluciones. Response crudo (primeros 2000 chars):'
-                    '<pre style="white-space:pre-wrap;font-size:11px;'
-                    'background:#f8f8f8;padding:8px;border:1px solid #ddd;'
-                    'max-height:400px;overflow:auto">{}</pre>',
-                    raw[:2000],
-                ),
-                level=messages.WARNING,
-            )
-            return redirect
-
-        rows = ''.join(
-            '<tr>'
-            f'<td>{r["resolution_number"]}</td>'
-            f'<td>{r["prefix"]}</td>'
-            f'<td>{r["from_number"]} – {r["to_number"]}</td>'
-            f'<td>{r["valid_date_from"]} → {r["valid_date_to"]}</td>'
-            f'<td><code style="font-size:11px">{r["technical_key"][:20]}…</code></td>'
-            '</tr>'
-            for r in resolutions
-        )
-        html = (
-            '<table style="border-collapse:collapse;font-size:12px;margin-top:6px">'
-            '<thead><tr style="background:#eee">'
-            '<th style="padding:4px 8px">Resolución</th>'
-            '<th style="padding:4px 8px">Prefijo</th>'
-            '<th style="padding:4px 8px">Rango</th>'
-            '<th style="padding:4px 8px">Vigencia</th>'
-            '<th style="padding:4px 8px">Clave técnica</th>'
-            '</tr></thead>'
-            f'<tbody>{rows}</tbody></table>'
-        )
-        self.message_user(
-            request,
-            format_html(
-                '<strong>Resoluciones DIAN ({} encontradas)</strong>{}',
-                len(resolutions), mark_safe(html),
-            ),
-            level=messages.SUCCESS,
-        )
-        return redirect
+        context = {
+            **self.admin_site.each_context(request),
+            'tenant':       tenant,
+            'config':       config,
+            'resolutions':  resolutions,
+            'raw_response': raw if not resolutions else '',
+            'title':        f'Resoluciones DIAN — {tenant.name}',
+        }
+        return render(request, 'admin/tenants/tenant/resolution.html', context)
 
 
 # ---------------------------------------------------------------------------
