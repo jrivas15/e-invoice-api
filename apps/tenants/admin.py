@@ -459,7 +459,7 @@ class TenantAdmin(admin.ModelAdmin):
 
         try:
             p12, password = load_certificate(tenant)
-            resolutions = get_numbering_range(p12, password, config)
+            resolutions, raw = get_numbering_range(p12, password, config)
         except Exception as exc:
             self.message_user(
                 request, f'Error consultando DIAN: {exc}',
@@ -470,7 +470,13 @@ class TenantAdmin(admin.ModelAdmin):
         if not resolutions:
             self.message_user(
                 request,
-                'DIAN no devolvió resoluciones para este NIT/software.',
+                format_html(
+                    'DIAN no devolvió resoluciones. Response crudo (primeros 2000 chars):'
+                    '<pre style="white-space:pre-wrap;font-size:11px;'
+                    'background:#f8f8f8;padding:8px;border:1px solid #ddd;'
+                    'max-height:400px;overflow:auto">{}</pre>',
+                    raw[:2000],
+                ),
                 level=messages.WARNING,
             )
             return redirect

@@ -667,33 +667,50 @@ def get_numbering_range(p12_bytes: bytes, cert_password: str, config) -> list[di
                          headers=headers, timeout=30, verify=True)
     resp.raise_for_status()
 
-    return _parse_numbering_range(resp.text)
+    parsed = _parse_numbering_range(resp.text)
+    # Adjunta el response crudo para debugging cuando no hay resoluciones
+    return parsed, resp.text
 
 
 def _parse_numbering_range(soap_response: str) -> list[dict]:
-    """Extrae las resoluciones del response de GetNumberingRange."""
+    """Extrae las resoluciones del response de GetNumberingRange. Namespace-agnostic."""
     from lxml import etree
     root = etree.fromstring(soap_response.encode('utf-8'))
-    NS = 'http://schemas.datacontract.org/2004/07/DianResponse'
 
-    def _txt(parent, tag):
-        node = parent.find(f'{{{NS}}}{tag}')
-        return (node.text or '').strip() if node is not None and node.text else ''
+    def _local(tag: str) -> str:
+        """Strip namespace from element tag."""
+        return tag.split('}', 1)[-1] if '}' in tag else tag
+
+    def _child_text(parent, local_name: str) -> str:
+        for child in parent:
+            if _local(child.tag) == local_name and child.text:
+                return child.text.strip()
+        return ''
 
     results = []
-    for item in root.iter(f'{{{NS}}}NumberRangeResponse'):
+    for item in root.iter():
+        if _local(item.tag) != 'NumberRangeResponse':
+            continue
         results.append({
-            'resolution_number': _txt(item, 'ResolutionNumber'),
-            'resolution_date':   _txt(item, 'ResolutionDate'),
-            'prefix':            _txt(item, 'Prefix'),
-            'from_number':       _txt(item, 'FromNumber'),
-            'to_number':         _txt(item, 'ToNumber'),
-            'valid_date_from':   _txt(item, 'ValidDateFrom'),
-            'valid_date_to':     _txt(item, 'ValidDateTo'),
-            'technical_key':     _txt(item, 'TechnicalKey'),
+            'resolution_number': _child_text(item, 'ResolutionNumber'),
+            'resolution_date':   _child_text(item, 'ResolutionDate'),
+            'prefix':            _child_text(item, 'Prefix'),
+            'from_number':       _child_text(item, 'FromNumber'),
+            'to_number':         _child_text(item, 'ToNumber'),
+            'valid_date_from':   _child_text(item, 'ValidDateFrom'),
+            'valid_date_to':     _child_text(item, 'ValidDateTo'),
+            'technical_key':     _child_text(item, 'TechnicalKey'),
         })
 
-    logger.info('GetNumberingRange — %d resoluciones encontradas', len(results))
+    if not results:
+        # Log raw response for debugging — DIAN may have returned a fault
+        # or different element name
+        logger.warning(
+            'GetNumberingRange: sin NumberRangeResponse. Response crudo: %s',
+            soap_response[:2000],
+        )
+    else:
+        logger.info('GetNumberingRange — %d resoluciones encontradas', len(results))
     return results
 
 
