@@ -322,10 +322,16 @@ class TenantAdmin(admin.ModelAdmin):
         )
 
     def _test_invoice_view(self, request, pk):
-        """Crea factura de 1000 pesos + firma + envía al set de pruebas DIAN."""
+        """Crea factura de 1000 pesos + firma + envía al set de pruebas DIAN.
+
+        Siempre usa la resolución de pruebas (TestResolution) y el contador
+        `test_current_number`, sin importar el ambiente del tenant — el set
+        de pruebas es un flujo de habilitación.
+        """
         from django.utils import timezone
+        from django.db.models import F
         from apps.invoices.models import Invoice
-        from apps.invoices.services.invoice_service import get_next_number
+        from apps.tenants.models import TestResolution, apply_test_resolution
         from core.cert_service import load_certificate
         from core.xml_builder import build_xml
         from core.signer import sign_xml
@@ -358,7 +364,16 @@ class TenantAdmin(admin.ModelAdmin):
                               level=messages.ERROR)
             return redirect
 
-        full_number, number, prefix = get_next_number(tenant)
+        # Incrementa el contador de PRUEBAS atómicamente (sin importar ambiente)
+        test_res = TestResolution.get_solo()
+        FiscalConfig.objects.filter(tenant=tenant).update(
+            test_current_number=F('test_current_number') + 1
+        )
+        config.refresh_from_db(fields=['test_current_number'])
+        number      = config.test_current_number
+        prefix      = test_res.invoice_prefix
+        full_number = f'{prefix}{number}'
+
         invoice = Invoice.objects.create(
             tenant=tenant,
             certificate=cert,
@@ -394,8 +409,10 @@ class TenantAdmin(admin.ModelAdmin):
         )
 
         try:
-            from apps.tenants.models import apply_test_resolution
-            apply_test_resolution(config)
+            # Forzar resolución de pruebas SIEMPRE — incluso si ambiente=PRODUCCIÓN
+            apply_test_resolution(config, force=True)
+            # También fuerza el QR/URL al catálogo de habilitación
+            config.ambiente = 'PRUEBAS'
             p12, password = load_certificate(tenant)
             xml, cufe, qr_data = build_xml(invoice, config)
             signed_xml = sign_xml(xml, p12, password)

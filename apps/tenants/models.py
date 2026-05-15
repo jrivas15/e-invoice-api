@@ -174,13 +174,18 @@ _TEST_OVERRIDE_FIELDS = (
 )
 
 
-def apply_test_resolution(config):
+def apply_test_resolution(config, force: bool = False):
     """
-    Si `config.ambiente == 'PRUEBAS'`, sustituye en memoria los campos de
-    resolución del FiscalConfig con los del singleton TestResolution.
+    Sustituye en memoria los campos de resolución del FiscalConfig con los
+    del singleton TestResolution.
+
+    - Por default solo aplica si `config.ambiente == 'PRUEBAS'`.
+    - Con `force=True` sustituye siempre (útil para el flujo de set de pruebas,
+      que siempre debe usar la resolución de habilitación).
+
     No persiste cambios — el caller no debe llamar `.save()` después.
     """
-    if config.ambiente != 'PRUEBAS':
+    if not force and config.ambiente != 'PRUEBAS':
         return config
     test = TestResolution.get_solo()
     for field in _TEST_OVERRIDE_FIELDS:
