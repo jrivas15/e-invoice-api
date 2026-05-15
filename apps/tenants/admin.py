@@ -324,9 +324,9 @@ class TenantAdmin(admin.ModelAdmin):
     def _test_invoice_view(self, request, pk):
         """Crea factura de 1000 pesos + firma + envía al set de pruebas DIAN.
 
-        Siempre usa la resolución de pruebas (TestResolution) y el contador
-        `test_current_number`, sin importar el ambiente del tenant — el set
-        de pruebas es un flujo de habilitación.
+        SIEMPRE usa la resolución de pruebas (TestResolution) y el contador
+        `test_current_number`, ignorando `config.ambiente` — el set de pruebas
+        es un flujo de habilitación.
         """
         from django.utils import timezone
         from django.db.models import F
@@ -364,7 +364,7 @@ class TenantAdmin(admin.ModelAdmin):
                               level=messages.ERROR)
             return redirect
 
-        # Incrementa el contador de PRUEBAS atómicamente (sin importar ambiente)
+        # Set de pruebas → siempre incrementa el contador de pruebas
         test_res = TestResolution.get_solo()
         FiscalConfig.objects.filter(tenant=tenant).update(
             test_current_number=F('test_current_number') + 1
@@ -409,10 +409,8 @@ class TenantAdmin(admin.ModelAdmin):
         )
 
         try:
-            # Forzar resolución de pruebas SIEMPRE — incluso si ambiente=PRODUCCIÓN
+            # Forzar resolución de pruebas SIEMPRE (set de pruebas = habilitación)
             apply_test_resolution(config, force=True)
-            # También fuerza el QR/URL al catálogo de habilitación
-            config.ambiente = 'PRUEBAS'
             p12, password = load_certificate(tenant)
             xml, cufe, qr_data = build_xml(invoice, config)
             signed_xml = sign_xml(xml, p12, password)

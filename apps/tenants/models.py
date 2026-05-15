@@ -179,9 +179,10 @@ def apply_test_resolution(config, force: bool = False):
     Sustituye en memoria los campos de resolución del FiscalConfig con los
     del singleton TestResolution.
 
-    - Por default solo aplica si `config.ambiente == 'PRUEBAS'`.
-    - Con `force=True` sustituye siempre (útil para el flujo de set de pruebas,
-      que siempre debe usar la resolución de habilitación).
+    - `force=False` (default): solo aplica si `config.ambiente == 'PRUEBAS'`.
+    - `force=True`: sustituye siempre y fuerza `config.ambiente='PRUEBAS'`
+      en memoria (necesario para que el QR apunte a `vpfe-hab`).
+      Útil para el flujo del set de pruebas, que siempre es habilitación.
 
     No persiste cambios — el caller no debe llamar `.save()` después.
     """
@@ -190,6 +191,8 @@ def apply_test_resolution(config, force: bool = False):
     test = TestResolution.get_solo()
     for field in _TEST_OVERRIDE_FIELDS:
         setattr(config, field, getattr(test, field))
+    if force:
+        config.ambiente = 'PRUEBAS'
     return config
 
 
