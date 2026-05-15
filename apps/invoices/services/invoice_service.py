@@ -7,21 +7,37 @@ logger = logging.getLogger(__name__)
 from django.utils import timezone
 
 from apps.invoices.models import Invoice, RetryQueue, MonthlyUsage
-from apps.tenants.models import FiscalConfig
+from apps.tenants.models import FiscalConfig, TestResolution, apply_test_resolution
 from core.cert_service import load_certificate
 from core.xml_builder import build_xml
 from core.signer import sign_xml
 from core.dian_client import send_to_dian
 
 
-def get_next_number(tenant) -> tuple[str, int]:
-    """Atomically increments invoice number. Race-condition safe."""
+def get_next_number(tenant) -> tuple[str, int, str]:
+    """
+    Atomically increments invoice number. Race-condition safe.
+    Returns (full_number, number, prefix).
+
+    En PRUEBAS usa `test_current_number` + prefijo del singleton TestResolution.
+    En PRODUCCIÓN usa `current_number` + prefijo del FiscalConfig.
+    """
+    config = FiscalConfig.objects.get(tenant=tenant)
+    if config.ambiente == 'PRUEBAS':
+        FiscalConfig.objects.filter(tenant=tenant).update(
+            test_current_number=F('test_current_number') + 1
+        )
+        config.refresh_from_db(fields=['test_current_number'])
+        prefix = TestResolution.get_solo().invoice_prefix
+        full = f"{prefix}{config.test_current_number}"
+        return full, config.test_current_number, prefix
+
     FiscalConfig.objects.filter(tenant=tenant).update(
         current_number=F('current_number') + 1
     )
-    config = FiscalConfig.objects.get(tenant=tenant)
+    config.refresh_from_db(fields=['current_number'])
     full = f"{config.invoice_prefix}{config.current_number}"
-    return full, config.current_number
+    return full, config.current_number, config.invoice_prefix
 
 
 def process_invoice(invoice_id: str):
@@ -35,6 +51,7 @@ def process_invoice(invoice_id: str):
 
     try:
         config = FiscalConfig.objects.get(tenant=tenant)
+        apply_test_resolution(config)
         p12, password = load_certificate(tenant)
 
         xml, cufe, qr_data = build_xml(invoice, config)

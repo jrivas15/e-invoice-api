@@ -6,7 +6,10 @@ from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 
 from core.cert_service import encrypt
-from .models import Certificate, FiscalConfig, Municipality, TAX_RESPONSIBILITIES, TRIBUTOS_NAMES, Tenant
+from .models import (
+    Certificate, FiscalConfig, Municipality, TAX_RESPONSIBILITIES,
+    TestResolution, TRIBUTOS_NAMES, Tenant,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -183,12 +186,20 @@ class FiscalConfigInline(admin.StackedInline):
                 ('tax_scheme_id',),
             ),
         }),
-        ('Resolución DIAN', {
+        ('Resolución DIAN (PRODUCCIÓN)', {
             'fields': (
                 'invoice_prefix',
                 'resolution_number',
                 ('resolution_date', 'resolution_end_date'),
                 ('range_start', 'range_end', 'current_number'),
+                'test_current_number',
+            ),
+            'description': (
+                'Estos campos se usan cuando <code>ambiente = PRODUCCIÓN</code>. '
+                'En PRUEBAS se usa la resolución global (Admin → Resolución de pruebas) '
+                'y el contador <code>test_current_number</code>. '
+                'Usa el botón "📋 Consultar resolución DIAN" para cargar estos campos '
+                'automáticamente desde DIAN.'
             ),
         }),
         ('Software DIAN', {
@@ -282,6 +293,11 @@ class TenantAdmin(admin.ModelAdmin):
                 self.admin_site.admin_view(self._resolution_view),
                 name='tenant-resolution',
             ),
+            path(
+                '<uuid:pk>/load-prod-resolution/',
+                self.admin_site.admin_view(self._load_prod_resolution),
+                name='tenant-load-prod-resolution',
+            ),
         ]
         return custom + urls
 
@@ -342,11 +358,11 @@ class TenantAdmin(admin.ModelAdmin):
                               level=messages.ERROR)
             return redirect
 
-        full_number, number = get_next_number(tenant)
+        full_number, number, prefix = get_next_number(tenant)
         invoice = Invoice.objects.create(
             tenant=tenant,
             certificate=cert,
-            prefix=config.invoice_prefix,
+            prefix=prefix,
             number=number,
             full_number=full_number,
             invoice_date=timezone.now().date(),
@@ -378,6 +394,8 @@ class TenantAdmin(admin.ModelAdmin):
         )
 
         try:
+            from apps.tenants.models import apply_test_resolution
+            apply_test_resolution(config)
             p12, password = load_certificate(tenant)
             xml, cufe, qr_data = build_xml(invoice, config)
             signed_xml = sign_xml(xml, p12, password)
@@ -477,6 +495,65 @@ class TenantAdmin(admin.ModelAdmin):
         }
         return render(request, 'admin/tenants/tenant/resolution.html', context)
 
+    def _load_prod_resolution(self, request, pk):
+        """Recibe POST con los datos de una resolución de DIAN y los carga en
+        los campos de producción del FiscalConfig."""
+        if request.method != 'POST':
+            return HttpResponseRedirect(
+                reverse('admin:tenant-resolution', args=[pk])
+            )
+
+        from datetime import datetime as dt
+
+        tenant = Tenant.objects.get(pk=pk)
+        try:
+            config = FiscalConfig.objects.get(tenant=tenant)
+        except FiscalConfig.DoesNotExist:
+            self.message_user(request, 'El tenant no tiene FiscalConfig.',
+                              level=messages.ERROR)
+            return HttpResponseRedirect(
+                reverse('admin:tenant-resolution', args=[pk])
+            )
+
+        def _parse_date(s):
+            return dt.strptime(s, '%Y-%m-%d').date() if s else None
+
+        try:
+            from_number = int(request.POST.get('from_number', '0') or '0')
+            to_number   = int(request.POST.get('to_number',   '0') or '0')
+
+            config.invoice_prefix      = request.POST.get('prefix', '') or ''
+            config.resolution_number   = request.POST.get('resolution_number', '')
+            config.resolution_date     = _parse_date(request.POST.get('resolution_date', '')) or config.resolution_date
+            config.resolution_end_date = _parse_date(request.POST.get('valid_date_to', ''))
+            config.range_start         = from_number
+            config.range_end           = to_number
+            # current_number = from_number - 1 → la primera factura será from_number
+            config.current_number      = max(from_number - 1, 0)
+            config.clave_tecnica       = request.POST.get('technical_key', '')
+            config.save()
+        except Exception as exc:
+            self.message_user(
+                request, f'Error guardando la resolución: {exc}',
+                level=messages.ERROR,
+            )
+            return HttpResponseRedirect(
+                reverse('admin:tenant-resolution', args=[pk])
+            )
+
+        self.message_user(
+            request,
+            format_html(
+                'Resolución <strong>{}</strong> cargada como producción para <strong>{}</strong>. '
+                'Recuerda cambiar <code>ambiente</code> a PRODUCCIÓN cuando estés listo.',
+                config.resolution_number, tenant.name,
+            ),
+            level=messages.SUCCESS,
+        )
+        return HttpResponseRedirect(
+            reverse('admin:tenants_tenant_change', args=[pk])
+        )
+
 
 # ---------------------------------------------------------------------------
 # CertificateAdmin (vista independiente)
@@ -513,3 +590,40 @@ class CertificateAdmin(admin.ModelAdmin):
             return mark_safe('<span style="color:green;font-weight:bold">✔ Certificado cargado</span>')
         return mark_safe('<span style="color:#999">Sin certificado</span>')
     cert_loaded.short_description = 'Estado'
+
+
+# ---------------------------------------------------------------------------
+# TestResolution — singleton global compartido por todos los tenants en PRUEBAS
+# ---------------------------------------------------------------------------
+
+@admin.register(TestResolution)
+class TestResolutionAdmin(admin.ModelAdmin):
+    fieldsets = (
+        ('Resolución de pruebas DIAN (global)', {
+            'fields': (
+                'invoice_prefix',
+                'resolution_number',
+                ('resolution_date', 'resolution_end_date'),
+                ('range_start', 'range_end'),
+                'clave_tecnica',
+            ),
+            'description': (
+                'Esta resolución se usa por <strong>todos los tenants</strong> '
+                'cuyo ambiente sea PRUEBAS. '
+                'Se mantiene una única fila (singleton).'
+            ),
+        }),
+    )
+    readonly_fields = ()
+
+    def has_add_permission(self, request):
+        return not TestResolution.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def changelist_view(self, request, extra_context=None):
+        obj = TestResolution.get_solo()
+        return HttpResponseRedirect(
+            reverse('admin:tenants_testresolution_change', args=[obj.pk])
+        )

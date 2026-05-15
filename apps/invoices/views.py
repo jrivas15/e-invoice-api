@@ -27,12 +27,12 @@ class InvoiceListView(APIView):
         config = FiscalConfig.objects.get(tenant=tenant)
         cert = Certificate.objects.get(tenant=tenant, active=True)
 
-        full_number, number = get_next_number(tenant)
+        full_number, number, prefix = get_next_number(tenant)
         logger.debug('POST /invoices payload tenant=%s', tenant.id)
         invoice = Invoice.objects.create(
             tenant=tenant,
             certificate=cert,
-            prefix=config.invoice_prefix,
+            prefix=prefix,
             number=number,
             full_number=full_number,
             invoice_date=timezone.now().date(),

@@ -13,43 +13,64 @@
 {% endblock %}
 
 {% block content %}
-<h1>Resoluciones autorizadas — {{ tenant.name }}</h1>
-<p style="color:var(--body-quiet-color)">
-  NIT <code style="background:var(--darkened-bg);padding:2px 6px;border-radius:3px">{{ config.nit }}</code>
-  · Software <code style="background:var(--darkened-bg);padding:2px 6px;border-radius:3px">{{ config.software_id }}</code>
-  · Ambiente <code style="background:var(--darkened-bg);padding:2px 6px;border-radius:3px">{{ config.ambiente }}</code>
+<div style="background:#ffffff;color:#000000;padding:24px;border-radius:6px">
+
+<h1 style="color:#000000;margin-top:0">Resoluciones autorizadas — {{ tenant.name }}</h1>
+<p style="color:#555555">
+  NIT <code style="background:#f0f0f0;color:#000000;padding:2px 6px;border-radius:3px">{{ config.nit }}</code>
+  · Software <code style="background:#f0f0f0;color:#000000;padding:2px 6px;border-radius:3px">{{ config.software_id }}</code>
+  · Ambiente <code style="background:#f0f0f0;color:#000000;padding:2px 6px;border-radius:3px">{{ config.ambiente }}</code>
 </p>
 
 {% if resolutions %}
-<p>{{ resolutions|length }} resolución(es) encontrada(s).</p>
+<p style="color:#000000">{{ resolutions|length }} resolución(es) encontrada(s).</p>
 
 {% for r in resolutions %}
-<div style="border:1px solid var(--border-color);border-radius:6px;padding:16px;margin-bottom:16px;background:var(--body-bg);color:var(--body-fg)">
-  <h2 style="margin-top:0;color:var(--link-fg)">Resolución {{ r.resolution_number }}</h2>
-  <table style="width:100%;border-collapse:collapse;color:var(--body-fg)">
+<div style="border:1px solid #dddddd;border-radius:6px;padding:16px;margin-bottom:16px;background:#ffffff;color:#000000">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <h2 style="margin:0;color:#000000">Resolución {{ r.resolution_number }}</h2>
+    <form method="post" action="{% url 'admin:tenant-load-prod-resolution' tenant.pk %}" style="margin:0">
+      {% csrf_token %}
+      <input type="hidden" name="prefix"            value="{{ r.prefix }}">
+      <input type="hidden" name="resolution_number" value="{{ r.resolution_number }}">
+      <input type="hidden" name="resolution_date"   value="{{ r.resolution_date }}">
+      <input type="hidden" name="from_number"       value="{{ r.from_number }}">
+      <input type="hidden" name="to_number"         value="{{ r.to_number }}">
+      <input type="hidden" name="valid_date_from"   value="{{ r.valid_date_from }}">
+      <input type="hidden" name="valid_date_to"     value="{{ r.valid_date_to }}">
+      <input type="hidden" name="technical_key"     value="{{ r.technical_key }}">
+      <button type="submit"
+              onclick="return confirm('¿Cargar esta resolución como PRODUCCIÓN para {{ tenant.name }}? Sobrescribirá los campos actuales.')"
+              style="cursor:pointer;padding:8px 16px;background:#28a745;color:#ffffff;border:none;border-radius:4px;font-weight:600;font-size:13px">
+        💾 Cargar como producción
+      </button>
+    </form>
+  </div>
+
+  <table style="width:100%;border-collapse:collapse;color:#000000;background:#ffffff">
     <tr>
-      <th style="text-align:left;padding:8px 12px;width:200px;color:var(--body-quiet-color);font-weight:600">Prefijo</th>
-      <td style="padding:8px 12px;font-family:monospace;font-size:14px">{{ r.prefix|default:"—" }}</td>
+      <th style="text-align:left;padding:8px 12px;width:200px;color:#555555;font-weight:600;background:#ffffff">Prefijo</th>
+      <td style="padding:8px 12px;font-family:monospace;font-size:14px;color:#000000;background:#ffffff">{{ r.prefix|default:"—" }}</td>
     </tr>
-    <tr style="background:var(--darkened-bg)">
-      <th style="text-align:left;padding:8px 12px;color:var(--body-quiet-color);font-weight:600">Rango autorizado</th>
-      <td style="padding:8px 12px;font-family:monospace">{{ r.from_number }} → {{ r.to_number }}</td>
-    </tr>
-    <tr>
-      <th style="text-align:left;padding:8px 12px;color:var(--body-quiet-color);font-weight:600">Fecha resolución</th>
-      <td style="padding:8px 12px">{{ r.resolution_date }}</td>
-    </tr>
-    <tr style="background:var(--darkened-bg)">
-      <th style="text-align:left;padding:8px 12px;color:var(--body-quiet-color);font-weight:600">Vigencia</th>
-      <td style="padding:8px 12px">{{ r.valid_date_from }} → {{ r.valid_date_to }}</td>
+    <tr style="background:#f8f8f8">
+      <th style="text-align:left;padding:8px 12px;color:#555555;font-weight:600;background:#f8f8f8">Rango autorizado</th>
+      <td style="padding:8px 12px;font-family:monospace;color:#000000;background:#f8f8f8">{{ r.from_number }} → {{ r.to_number }}</td>
     </tr>
     <tr>
-      <th style="text-align:left;padding:8px 12px;color:var(--body-quiet-color);font-weight:600;vertical-align:top">Clave técnica</th>
-      <td style="padding:8px 12px">
-        <code style="font-size:12px;word-break:break-all;background:var(--darkened-bg);color:var(--body-fg);padding:6px 10px;border-radius:3px;display:inline-block;border:1px solid var(--border-color)">{{ r.technical_key }}</code>
+      <th style="text-align:left;padding:8px 12px;color:#555555;font-weight:600;background:#ffffff">Fecha resolución</th>
+      <td style="padding:8px 12px;color:#000000;background:#ffffff">{{ r.resolution_date }}</td>
+    </tr>
+    <tr style="background:#f8f8f8">
+      <th style="text-align:left;padding:8px 12px;color:#555555;font-weight:600;background:#f8f8f8">Vigencia</th>
+      <td style="padding:8px 12px;color:#000000;background:#f8f8f8">{{ r.valid_date_from }} → {{ r.valid_date_to }}</td>
+    </tr>
+    <tr>
+      <th style="text-align:left;padding:8px 12px;color:#555555;font-weight:600;vertical-align:top;background:#ffffff">Clave técnica</th>
+      <td style="padding:8px 12px;background:#ffffff">
+        <code style="font-size:12px;word-break:break-all;background:#f0f0f0;color:#000000;padding:6px 10px;border-radius:3px;display:inline-block;border:1px solid #dddddd">{{ r.technical_key }}</code>
         <button type="button"
                 onclick="navigator.clipboard.writeText('{{ r.technical_key }}'); this.innerText='✓ Copiada'"
-                style="margin-left:8px;cursor:pointer;padding:6px 12px;background:var(--primary);color:var(--primary-fg);border:none;border-radius:3px;font-weight:600">
+                style="margin-left:8px;cursor:pointer;padding:6px 12px;background:#417690;color:#ffffff;border:none;border-radius:3px;font-weight:600">
           📋 Copiar
         </button>
       </td>
@@ -59,7 +80,7 @@
 {% endfor %}
 
 {% else %}
-<div style="background:var(--darkened-bg);border:1px solid var(--border-color);color:var(--body-fg);padding:16px;border-radius:6px;margin:16px 0">
+<div style="background:#fff3cd;border:1px solid #ffc107;color:#000000;padding:16px;border-radius:6px;margin:16px 0">
   <strong>No se encontraron resoluciones.</strong>
   <p>DIAN no devolvió resoluciones para este NIT/software. Verifica que:</p>
   <ul>
@@ -69,14 +90,16 @@
   </ul>
   {% if raw_response %}
   <details>
-    <summary style="cursor:pointer;color:var(--link-fg)">Ver respuesta cruda de DIAN</summary>
-    <pre style="white-space:pre-wrap;font-size:11px;background:var(--body-bg);color:var(--body-fg);padding:8px;border:1px solid var(--border-color);max-height:400px;overflow:auto;margin-top:8px">{{ raw_response }}</pre>
+    <summary style="cursor:pointer;color:#417690">Ver respuesta cruda de DIAN</summary>
+    <pre style="white-space:pre-wrap;font-size:11px;background:#ffffff;color:#000000;padding:8px;border:1px solid #dddddd;max-height:400px;overflow:auto;margin-top:8px">{{ raw_response }}</pre>
   </details>
   {% endif %}
 </div>
 {% endif %}
 
 <p style="margin-top:24px">
-  <a href="{% url 'admin:tenants_tenant_change' tenant.pk %}" class="button">← Volver al tenant</a>
+  <a href="{% url 'admin:tenants_tenant_change' tenant.pk %}" style="display:inline-block;padding:8px 16px;background:#417690;color:#ffffff;text-decoration:none;border-radius:4px;font-weight:600">← Volver al tenant</a>
 </p>
+
+</div>
 {% endblock %}

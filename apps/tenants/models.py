@@ -98,6 +98,8 @@ class FiscalConfig(models.Model):
     range_start       = models.IntegerField(default=990000000)
     range_end         = models.IntegerField(default=995000000)
     current_number    = models.IntegerField(default=990000000)
+    # Consecutivo independiente cuando ambiente=PRUEBAS (rango de TestResolution)
+    test_current_number = models.IntegerField(default=990000000)
 
     # Contact
     phone = models.CharField(max_length=20, blank=True)
@@ -164,6 +166,64 @@ class Municipality(models.Model):
 
     def __str__(self):
         return f"{self.city_name} — {self.department_name} ({self.city_code})"
+
+
+_TEST_OVERRIDE_FIELDS = (
+    'invoice_prefix', 'resolution_number', 'resolution_date',
+    'resolution_end_date', 'range_start', 'range_end', 'clave_tecnica',
+)
+
+
+def apply_test_resolution(config):
+    """
+    Si `config.ambiente == 'PRUEBAS'`, sustituye en memoria los campos de
+    resolución del FiscalConfig con los del singleton TestResolution.
+    No persiste cambios — el caller no debe llamar `.save()` después.
+    """
+    if config.ambiente != 'PRUEBAS':
+        return config
+    test = TestResolution.get_solo()
+    for field in _TEST_OVERRIDE_FIELDS:
+        setattr(config, field, getattr(test, field))
+    return config
+
+
+class TestResolution(models.Model):
+    """
+    Resolución de facturación de pruebas — singleton compartido por todos los tenants
+    cuando `FiscalConfig.ambiente == 'PRUEBAS'`. Modificable desde admin.
+    """
+    invoice_prefix      = models.CharField(max_length=10, default='SETP')
+    resolution_number   = models.CharField(max_length=50, default='18760000001')
+    resolution_date     = models.DateField(default=datetime.date(2019, 1, 19))
+    resolution_end_date = models.DateField(default=datetime.date(2030, 1, 19))
+    range_start         = models.IntegerField(default=990000000)
+    range_end           = models.IntegerField(default=995000000)
+    clave_tecnica       = models.CharField(
+        max_length=200,
+        default='fc8eac422eba16e22ffd8c6f94b3f40a6e38162c',
+    )
+    updated_at          = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'test_resolution'
+        verbose_name = 'Resolución de pruebas (global)'
+        verbose_name_plural = 'Resolución de pruebas (global)'
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        pass
+
+    @classmethod
+    def get_solo(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+    def __str__(self):
+        return f'Resolución pruebas: {self.invoice_prefix} {self.resolution_number}'
 
 
 class Certificate(models.Model):
