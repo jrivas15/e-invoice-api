@@ -52,6 +52,7 @@ class InvoiceListView(APIView):
             'id': str(invoice.id),
             'full_number': invoice.full_number,
             'status': invoice.status,
+            'ambiente': config.ambiente,
             'message': 'Factura recibida y en procesamiento',
         }, status=status.HTTP_201_CREATED)
 
@@ -115,10 +116,25 @@ class InvoiceDetailView(APIView):
         if not invoice:
             return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
         dian = invoice.dian_response or {}
+
+        # Extrae la URL del catálogo DIAN del qr_data (que se generó con el
+        # ambiente del momento de la factura)
+        qr_url = ''
+        if invoice.qr_data:
+            for part in invoice.qr_data.split(' '):
+                if part.startswith('URL='):
+                    qr_url = part[len('URL='):]
+                    break
+
+        config = FiscalConfig.objects.filter(tenant=request.tenant).first()
+        ambiente = config.ambiente if config else 'PRUEBAS'
+
         return Response({
             'id':               str(invoice.id),
             'full_number':      invoice.full_number,
             'status':           invoice.status,
+            'ambiente':         ambiente,
+            'qr_url':           qr_url,
             'message':          STATUS_MESSAGES.get(invoice.status, invoice.status),
             'dian_code':        dian.get('code'),
             'dian_status':      dian.get('status_description'),
